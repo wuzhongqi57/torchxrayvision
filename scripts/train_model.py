@@ -6,7 +6,7 @@ sys.path.insert(0,"..")
 import os,sys,inspect
 from glob import glob
 from os.path import exists, join
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt  # Not used in training script
 import numpy as np
 from tqdm import tqdm
 import argparse
