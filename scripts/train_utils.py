@@ -74,6 +74,16 @@ def train(model, dataset, cfg):
     optim = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=1e-5, amsgrad=True)
     print(optim)
 
+    # ========================================================================
+    # Loss 函数定义位置
+    # ========================================================================
+    # Loss 函数: torch.nn.BCEWithLogitsLoss()
+    # - 功能: 二元交叉熵损失（Binary Cross Entropy with Logits）
+    # - 适用场景: 多标签分类任务
+    # - 特点: 内部结合了 sigmoid 和 BCE，数值稳定性更好
+    # - 输入: model 输出的 logits (未经过 sigmoid) 和真实标签
+    # - 注意: 在 train_epoch() 中会对每个任务(task)分别计算 loss
+    # ========================================================================
     criterion = torch.nn.BCEWithLogitsLoss()
 
     # Checkpointing
@@ -260,6 +270,16 @@ def valid_test_epoch(name, epoch, model, device, data_loader, criterion, limit=N
             task_outputs[task] = np.concatenate(task_outputs[task])
             task_targets[task] = np.concatenate(task_targets[task])
     
+        # ====================================================================
+        # Metrics (AUC) 计算位置
+        # ====================================================================
+        # AUC 计算: sklearn.metrics.roc_auc_score()
+        # - 功能: 计算每个任务(类别)的 ROC-AUC 值
+        # - 输入: task_targets[task] (真实标签), task_outputs[task] (模型输出的 logits)
+        # - 输出: 每个任务的 AUC 值
+        # - 最终指标: 所有任务 AUC 的平均值 (macro-averaged AUC)
+        # - 注意: 如果某个任务只有单一类别，则返回 NaN
+        # ====================================================================
         task_aucs = []
         for task in range(len(task_targets)):
             if len(np.unique(task_targets[task]))> 1:

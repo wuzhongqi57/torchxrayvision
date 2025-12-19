@@ -1,6 +1,13 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# ============================================================================
+# NIH ChestX-ray 多标签训练主入口脚本
+# ============================================================================
+# 本脚本是 NIH ChestX-ray 多标签分类训练的主入口文件
+# 主要功能：数据加载、模型创建、训练流程调用
+# ============================================================================
+
 import os,sys
 sys.path.insert(0,"..")
 import os,sys,inspect
@@ -65,6 +72,14 @@ transforms = torchvision.transforms.Compose([xrv.datasets.XRayCenterCrop(),xrv.d
 datas = []
 datas_names = []
 if "nih" in cfg.dataset:
+    # ========================================================================
+    # Dataset 类定义位置
+    # ========================================================================
+    # 使用的 Dataset 类：xrv.datasets.NIH_Dataset
+    # 类定义文件路径：torchxrayvision/datasets.py (第383行开始)
+    # 功能：加载 NIH ChestX-ray14 数据集，包含14种胸部疾病的 multi-label 标注
+    # 返回格式：{"img": 图像张量, "lab": 标签向量(14维)}
+    # ========================================================================
     dataset = xrv.datasets.NIH_Dataset(
         imgpath=cfg.dataset_dir + "/images-512-NIH", 
         transform=transforms, data_aug=data_aug, unique_patients=False, views=["PA","AP"])
@@ -182,6 +197,9 @@ print("test_dataset.labels.shape", test_dataset.labels.shape)
 print("train_dataset",train_dataset)
 print("test_dataset",test_dataset)
     
+# ============================================================================
+# 模型 Backbone 和分类 Head 定义位置
+# ============================================================================
 # create models
 if "densenet" in cfg.model:
     model = xrv.models.DenseNet(num_classes=train_dataset.labels.shape[1], in_channels=1, 
@@ -192,9 +210,28 @@ elif "resnet101" in cfg.model:
     model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
     
 elif "resnet50" in cfg.model:
+    # ========================================================================
+    # 模型 Backbone 定义位置
+    # ========================================================================
+    # Backbone: torchvision.models.resnet50
+    # - 使用 ResNet50 作为特征提取 backbone
+    # - 修改第一层卷积：从 3 通道(RGB) 改为 1 通道(灰度X光片)
+    # - Backbone 结构：conv1 -> bn1 -> relu -> maxpool -> layer1-4 -> avgpool
+    # ========================================================================
     model = torchvision.models.resnet50(num_classes=train_dataset.labels.shape[1], pretrained=False)
     #patch for single channel
     model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    
+    # ========================================================================
+    # 分类 Head 结构
+    # ========================================================================
+    # 分类 Head: model.fc (全连接层)
+    # - 输入维度: 2048 (ResNet50 backbone 输出的特征维度)
+    # - 输出维度: train_dataset.labels.shape[1] (多标签类别数，通常为14)
+    # - 结构: Linear(2048 -> num_classes)
+    # - 输出: 每个类别的 logits (未经过 sigmoid)
+    # - 注意: 由于是多标签分类，每个类别独立输出，不使用 softmax
+    # ========================================================================
     
 elif "shufflenet_v2_x2_0" in cfg.model:
     model = torchvision.models.shufflenet_v2_x2_0(num_classes=train_dataset.labels.shape[1], pretrained=False)
@@ -207,7 +244,12 @@ elif "squeezenet1_1" in cfg.model:
 else:
     raise Exception("no model")
 
-
+# ============================================================================
+# 训练流程入口
+# ============================================================================
+# 调用 train_utils.train() 开始训练
+# 训练流程包括：loss 计算、metrics (AUC) 计算等，详见 train_utils.py
+# ============================================================================
 train_utils.train(model, train_dataset, cfg)
 
 
@@ -218,7 +260,49 @@ print("Done")
 #                                            num_workers=0, pin_memory=False)
 
 
-
-
+# ============================================================================
+# 完整前向流程总结：数据 → 模型 → loss → metric
+# ============================================================================
+# 
+# 1. 数据加载 (Data Loading)
+#    - 使用 NIH_Dataset 类 (torchxrayvision/datasets.py:383) 加载 NIH ChestX-ray 数据
+#    - 数据预处理：XRayCenterCrop() + XRayResizer(512) + 数据增强(可选)
+#    - 输出格式：{"img": [B, 1, 512, 512], "lab": [B, 14]} (B=batch_size, 14=多标签类别数)
+# 
+# 2. 模型前向传播 (Model Forward)
+#    - Backbone: ResNet50 (torchvision.models.resnet50)
+#      * 输入: [B, 1, 512, 512] 灰度X光图像
+#      * 第一层修改: conv1 从 3 通道改为 1 通道
+#      * 特征提取: conv1 -> bn1 -> relu -> maxpool -> layer1-4 -> avgpool
+#      * 输出特征: [B, 2048]
+#    - 分类 Head: model.fc (全连接层)
+#      * 输入: [B, 2048] (backbone 输出的特征向量)
+#      * 输出: [B, 14] (每个类别的 logits，未经过 sigmoid)
+# 
+# 3. Loss 计算 (Loss Computation)
+#    - Loss 函数: BCEWithLogitsLoss() (train_utils.py:77)
+#    - 计算方式: 对每个任务(类别)分别计算 loss，然后求和
+#      * 对每个 task: loss_task = BCEWithLogitsLoss(logits[:, task], labels[:, task])
+#      * 总 loss = sum(loss_task) (可选：使用 taskweights 加权)
+#    - 特点: 支持 NaN 标签（缺失标注），只对有效标签计算 loss
+# 
+# 4. Metrics 计算 (AUC Metric)
+#    - 计算位置: train_utils.py:266 (valid_test_epoch 函数中)
+#    - 计算方式:
+#      * 收集所有 batch 的预测 logits 和真实标签
+#      * 对每个任务: task_auc = roc_auc_score(task_targets, task_outputs)
+#      * 最终指标: mean(task_aucs) (macro-averaged AUC)
+#    - 注意: 如果某个任务只有单一类别，则跳过该任务的 AUC 计算
+# 
+# 完整流程示例:
+#   数据 → NIH_Dataset.__getitem__() → {"img": tensor, "lab": array}
+#        → DataLoader → batch {"img": [B,1,512,512], "lab": [B,14]}
+#        → model(images) → ResNet50 backbone → [B,2048] features
+#                        → model.fc → [B,14] logits
+#        → BCEWithLogitsLoss(logits, labels) → scalar loss
+#        → loss.backward() → optimizer.step() (训练时)
+#        → roc_auc_score(targets, outputs) → AUC metrics (验证时)
+# 
+# ============================================================================
 
 
