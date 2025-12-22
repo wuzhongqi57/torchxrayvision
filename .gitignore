@@ -6,4 +6,4 @@ __pycache__
 *.png
 *.DS_Store
 
-/output
+/experiment/output

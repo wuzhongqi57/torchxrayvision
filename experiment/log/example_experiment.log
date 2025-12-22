@@ -1,0 +1,56 @@
+Namespace(f='', name='example_experiment', output_dir='/workspace/torchxrayvision/experiment/output/nih-resnet50-example_experiment', dataset='nih', dataset_dir='/workspace/data', model='resnet50', seed=0, cuda=True, num_epochs=10, batch_size=32, shuffle=True, lr=0.001, threads=4, taskweights=True, featurereg=False, weightreg=False, data_aug=True, data_aug_rot=45, data_aug_trans=0.15, data_aug_scale=0.15, label_concat=False, label_concat_reg=False, labelunion=False)
+Compose(
+    <torchxrayvision.datasets.ToPILImage object at 0x7992791b1590>
+    RandomAffine(degrees=[-45.0, 45.0], translate=(0.15, 0.15), scale=(0.85, 1.15))
+    ToTensor()
+)
+datas_names ['nih']
+Lung Lesion doesn't exist. Adding nans instead.
+Fracture doesn't exist. Adding nans instead.
+Lung Opacity doesn't exist. Adding nans instead.
+Enlarged Cardiomediastinum doesn't exist. Adding nans instead.
+train_dataset.labels.shape (89864, 18)
+test_dataset.labels.shape (22256, 18)
+train_dataset SubsetDataset num_samples=89864
+└ of NIH_Dataset num_samples=112120 views=['PA', 'AP'] data_aug=Compose(
+      <torchxrayvision.datasets.ToPILImage object at 0x7992791b1590>
+      RandomAffine(degrees=[-45.0, 45.0], translate=(0.15, 0.15), scale=(0.85, 1.15))
+      ToTensor()
+  )
+test_dataset SubsetDataset num_samples=22256
+└ of NIH_Dataset num_samples=112120 views=['PA', 'AP'] data_aug=Compose(
+      <torchxrayvision.datasets.ToPILImage object at 0x7992791b1590>
+      RandomAffine(degrees=[-45.0, 45.0], translate=(0.15, 0.15), scale=(0.85, 1.15))
+      ToTensor()
+  )
+Our config:
+Namespace(f='', name='example_experiment', output_dir='/workspace/torchxrayvision/experiment/output/nih-resnet50-example_experiment', dataset='nih', dataset_dir='/workspace/data', model='resnet50', seed=0, cuda=True, num_epochs=10, batch_size=32, shuffle=True, lr=0.001, threads=4, taskweights=True, featurereg=False, weightreg=False, data_aug=True, data_aug_rot=45, data_aug_trans=0.15, data_aug_scale=0.15, label_concat=False, label_concat_reg=False, labelunion=False)
+Using device: cuda
+/workspace/torchxrayvision/experiment/output/nih-resnet50-example_experiment
+Adam (
+Parameter Group 0
+    amsgrad: True
+    betas: (0.9, 0.999)
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.001
+    maximize: False
+    weight_decay: 1e-05
+)
+Traceback (most recent call last):
+  File "/workspace/torchxrayvision/scripts/train_model.py", line 253, in <module>
+    train_utils.train(model, train_dataset, cfg)
+  File "/workspace/torchxrayvision/scripts/train_utils.py", line 102, in train
+    model.load_state_dict(torch.load(weights_file).state_dict())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/torch/serialization.py", line 1470, in load
+    raise pickle.UnpicklingError(_get_wo_message(str(e))) from None
+_pickle.UnpicklingError: Weights only load failed. This file can still be loaded, to do so you have two options, [1mdo those steps only if you trust the source of the checkpoint[0m. 
+	(1) In PyTorch 2.6, we changed the default value of the `weights_only` argument in `torch.load` from `False` to `True`. Re-running `torch.load` with `weights_only` set to `False` will likely succeed, but it can result in arbitrary code execution. Do it only if you got the file from a trusted source.
+	(2) Alternatively, to load with `weights_only=True` please check the recommended steps in the following error message.
+	WeightsUnpickler error: Unsupported global: GLOBAL torchvision.models.resnet.ResNet was not an allowed global by default. Please use `torch.serialization.add_safe_globals([ResNet])` or the `torch.serialization.safe_globals([ResNet])` context manager to allowlist this global if you trust this class/function.
+
+Check the documentation of torch.load to learn more about types accepted by default with weights_only https://pytorch.org/docs/stable/generated/torch.load.html.
