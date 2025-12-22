@@ -67,7 +67,11 @@ if cfg.data_aug:
     ])
     print(data_aug)
 
-transforms = torchvision.transforms.Compose([xrv.datasets.XRayCenterCrop(),xrv.datasets.XRayResizer(512)])
+# Determine input resolution based on model type
+# ViT models typically use 224x224, while other models use 512x512
+input_resolution = 224 if "vit" in cfg.model.lower() else 512
+transforms = torchvision.transforms.Compose([xrv.datasets.XRayCenterCrop(),xrv.datasets.XRayResizer(input_resolution)])
+print(f"Using input resolution: {input_resolution}x{input_resolution} for model: {cfg.model}")
 
 datas = []
 datas_names = []
@@ -232,6 +236,38 @@ elif "resnet50" in cfg.model:
     # - 输出: 每个类别的 logits (未经过 sigmoid)
     # - 注意: 由于是多标签分类，每个类别独立输出，不使用 softmax
     # ========================================================================
+    
+elif "vit" in cfg.model.lower():
+    # ========================================================================
+    # ViT (Vision Transformer) 模型定义位置
+    # ========================================================================
+    # Backbone: torchvision.models.vit_b_16 (通过 xrv.models.ViT 封装)
+    # - 使用 Vision Transformer 作为特征提取 backbone
+    # - 自动适配单通道输入（X射线图像）
+    # - 支持 ImageNet 预训练权重（可选）
+    # - 输入分辨率: 224x224 (ViT 标准输入尺寸)
+    # - Backbone 结构: patch embedding -> transformer encoder -> classification head
+    # ========================================================================
+    # 创建 ViT 模型
+    # - weights=None: 不使用预训练的任务特定权重（从头训练）
+    # - use_imagenet_pretrained: 是否使用 ImageNet 预训练的 backbone
+    #   设置为 True 可以使用 ImageNet 预训练权重进行迁移学习
+    # - num_classes 通过修改分类头自动设置
+    # ========================================================================
+    use_imagenet_pretrained = True  # 使用 ImageNet 预训练权重进行迁移学习
+    model = xrv.models.ViT(
+        weights=None,  # 不使用任务特定权重，从头训练分类头
+        use_imagenet_pretrained=use_imagenet_pretrained,
+        op_threshs=None
+    )
+    # 替换分类头以匹配数据集类别数
+    model.backbone.heads = torch.nn.Linear(model.hidden_dim, train_dataset.labels.shape[1])
+    # 为了兼容 train_utils.py 中的 model.classifier 引用，添加 classifier 属性
+    # train_utils.py 在 label_concat_reg 和 weightreg 中会使用 model.classifier
+    model.classifier = model.backbone.heads
+    print(f"ViT model created with ImageNet pretrained backbone: {use_imagenet_pretrained}")
+    print(f"ViT hidden dimension: {model.hidden_dim}")
+    print(f"ViT classification head: {train_dataset.labels.shape[1]} classes")
     
 elif "shufflenet_v2_x2_0" in cfg.model:
     model = torchvision.models.shufflenet_v2_x2_0(num_classes=train_dataset.labels.shape[1], pretrained=False)

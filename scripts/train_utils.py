@@ -13,7 +13,20 @@ import sklearn, sklearn.model_selection
 import torchxrayvision as xrv
 
 from tqdm import tqdm as tqdm_base
+import sys
+
 def tqdm(*args, **kwargs):
+    # 检测是否在非交互式环境（如日志文件）中运行
+    # 如果是，则完全禁用进度条以减少日志输出
+    is_tty = hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
+    
+    # 如果输出被重定向到文件，完全禁用进度条
+    if not is_tty:
+        kwargs.setdefault('disable', True)  # 完全禁用进度条
+    else:
+        # 交互式环境中使用默认设置
+        pass
+    
     if hasattr(tqdm_base, '_instances'):
         for instance in list(tqdm_base._instances):
             tqdm_base._decr_instances(instance)
@@ -166,7 +179,14 @@ def train_epoch(cfg, epoch, model, device, train_loader, optimizer, criterion, l
         print("task weights", weights)
     
     avg_loss = []
+    # 检测是否在非交互式环境
+    is_tty = hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
     t = tqdm(train_loader)
+    
+    # 在非交互式环境中，定期打印进度而不是使用进度条
+    log_interval = 50  # 每50个iteration打印一次
+    last_log_time = 0
+    
     for batch_idx, samples in enumerate(t):
         
         if limit and (batch_idx > limit):
@@ -219,7 +239,19 @@ def train_epoch(cfg, epoch, model, device, train_loader, optimizer, criterion, l
         loss.backward()
 
         avg_loss.append(loss.detach().cpu().numpy())
-        t.set_description(f'Epoch {epoch + 1} - Train - Loss = {np.mean(avg_loss):4.4f}')
+        
+        # 在交互式环境中，正常更新进度条描述
+        if is_tty:
+            t.set_description(f'Epoch {epoch + 1} - Train - Loss = {np.mean(avg_loss):4.4f}')
+        else:
+            # 在非交互式环境中，定期打印简洁的进度信息
+            if (batch_idx + 1) % log_interval == 0 or (batch_idx + 1) == len(train_loader):
+                import time
+                current_time = time.time()
+                elapsed = current_time - last_log_time if last_log_time > 0 else 0
+                last_log_time = current_time
+                progress = 100.0 * (batch_idx + 1) / len(train_loader)
+                print(f'Epoch {epoch + 1} - Train [{batch_idx + 1}/{len(train_loader)} ({progress:.1f}%)] - Loss = {np.mean(avg_loss):4.4f}')
 
         optimizer.step()
 
@@ -236,7 +268,12 @@ def valid_test_epoch(name, epoch, model, device, data_loader, criterion, limit=N
         task_targets[task] = []
         
     with torch.no_grad():
+        is_tty = hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
         t = tqdm(data_loader)
+        
+        # 在非交互式环境中，定期打印进度而不是使用进度条
+        log_interval = 50  # 每50个iteration打印一次
+        
         for batch_idx, samples in enumerate(t):
 
             if limit and (batch_idx > limit):
@@ -264,7 +301,15 @@ def valid_test_epoch(name, epoch, model, device, data_loader, criterion, limit=N
             loss = loss.sum()
             
             avg_loss.append(loss.detach().cpu().numpy())
-            t.set_description(f'Epoch {epoch + 1} - {name} - Loss = {np.mean(avg_loss):4.4f}')
+            
+            # 在交互式环境中，正常更新进度条描述
+            if is_tty:
+                t.set_description(f'Epoch {epoch + 1} - {name} - Loss = {np.mean(avg_loss):4.4f}')
+            else:
+                # 在非交互式环境中，定期打印简洁的进度信息
+                if (batch_idx + 1) % log_interval == 0 or (batch_idx + 1) == len(data_loader):
+                    progress = 100.0 * (batch_idx + 1) / len(data_loader)
+                    print(f'Epoch {epoch + 1} - {name} [{batch_idx + 1}/{len(data_loader)} ({progress:.1f}%)] - Loss = {np.mean(avg_loss):4.4f}')
             
         for task in range(len(task_targets)):
             task_outputs[task] = np.concatenate(task_outputs[task])

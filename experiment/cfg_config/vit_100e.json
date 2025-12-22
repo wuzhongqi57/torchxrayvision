@@ -1,0 +1,23 @@
+{
+    "name": "vit_100e",
+    "dataset": "nih",
+    "dataset_dir": "/workspace/data",
+    "model": "vit",
+    "seed": 0,
+    "cuda": true,
+    "num_epochs": 100,
+    "batch_size": 32,
+    "shuffle": true,
+    "lr": 0.001,
+    "threads": 4,
+    "taskweights": true,
+    "featurereg": false,
+    "weightreg": false,
+    "data_aug": true,
+    "data_aug_rot": 45,
+    "data_aug_trans": 0.15,
+    "data_aug_scale": 0.15,
+    "label_concat": false,
+    "label_concat_reg": false,
+    "labelunion": false
+}
