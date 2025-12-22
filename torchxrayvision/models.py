@@ -88,6 +88,15 @@ model_urls['resnet50-res512-all'] = {
     "input_resolution": 512,
 }
 
+# ViT models with ImageNet pretrained backbone
+# Note: These models use ImageNet pretrained ViT backbone and can optionally load task-specific weights
+model_urls['vit-base-res224-imagenet'] = {
+    "description": 'ViT-Base model with ImageNet pretrained backbone. No task-specific weights, uses ImageNet features only.',
+    "labels": ['Atelectasis', 'Consolidation', 'Infiltration', 'Pneumothorax', 'Edema', 'Emphysema', 'Fibrosis', 'Effusion', 'Pneumonia', 'Pleural_Thickening', 'Cardiomegaly', 'Nodule', 'Mass', 'Hernia', 'Lung Lesion', 'Fracture', 'Lung Opacity', 'Enlarged Cardiomediastinum'],
+    "input_resolution": 224,
+    # No weights_url means it will only use ImageNet pretrained backbone
+}
+
 # Just created for documentation
 
 
@@ -477,6 +486,207 @@ class ResNet(nn.Module):
         return out
 
 
+##########################
+class ViT(nn.Module):
+    """
+    Based on `"An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale" <https://arxiv.org/abs/2010.11929>`_
+
+    Possible weights for this class include:
+
+    .. code-block:: python
+
+        # 224x224 models with ImageNet pretrained backbone
+        model = xrv.models.ViT(weights="vit-base-res224-imagenet")
+        
+        # Models with task-specific weights (when available)
+        model = xrv.models.ViT(weights="vit-base-res224-all")
+
+    :param weights: Specify a weight name to load pre-trained weights
+    :param cache_dir: Override where the weights will be stored (default is ~/.torchxrayvision/)
+    :param op_threshs: Specify operating point thresholds
+    :param apply_sigmoid: Apply a sigmoid to outputs
+    :param use_imagenet_pretrained: Whether to use ImageNet pretrained backbone (default: True)
+
+    """
+
+    targets: List[str] = [
+        'Atelectasis',
+        'Consolidation',
+        'Infiltration',
+        'Pneumothorax',
+        'Edema',
+        'Emphysema',
+        'Fibrosis',
+        'Effusion',
+        'Pneumonia',
+        'Pleural_Thickening',
+        'Cardiomegaly',
+        'Nodule',
+        'Mass',
+        'Hernia',
+        'Lung Lesion',
+        'Fracture',
+        'Lung Opacity',
+        'Enlarged Cardiomediastinum',
+    ]
+    """"""
+
+    def __init__(self, weights: str = None, apply_sigmoid: bool = False, 
+                 cache_dir: str = None, op_threshs: torch.Tensor = None,
+                 use_imagenet_pretrained: bool = True):
+        super(ViT, self).__init__()
+
+        self.weights = weights
+        self.apply_sigmoid = apply_sigmoid
+
+        # Determine if we should use ImageNet pretrained weights
+        use_pretrained = use_imagenet_pretrained
+        
+        # Load ImageNet pretrained ViT backbone
+        try:
+            from torchvision.models.vision_transformer import ViT_B_16_Weights
+            weights_obj = ViT_B_16_Weights.IMAGENET1K_V1 if use_pretrained else None
+            self.backbone = torchvision.models.vit_b_16(weights=weights_obj, progress=True)
+        except (ImportError, AttributeError):
+            # Fallback for older torchvision versions
+            try:
+                self.backbone = torchvision.models.vit_b_16(pretrained=use_pretrained)
+            except:
+                raise ImportError("torchvision does not support ViT. Please upgrade torchvision to >= 0.13.0")
+
+        # Store original conv_proj for weight adaptation
+        original_conv_proj = self.backbone.conv_proj
+        
+        # Adapt for single channel input
+        self.backbone.conv_proj = nn.Conv2d(
+            1,  # Single channel input
+            original_conv_proj.out_channels,
+            kernel_size=original_conv_proj.kernel_size,
+            stride=original_conv_proj.stride,
+            padding=original_conv_proj.padding,
+            bias=original_conv_proj.bias is not None
+        )
+        
+        # If using ImageNet pretrained weights, adapt the first layer
+        if use_pretrained and original_conv_proj.weight.shape[1] == 3:
+            with torch.no_grad():
+                # Convert 3-channel weights to 1-channel by averaging
+                self.backbone.conv_proj.weight.data = original_conv_proj.weight.data.mean(dim=1, keepdim=True)
+                if original_conv_proj.bias is not None:
+                    self.backbone.conv_proj.bias = original_conv_proj.bias
+
+        # Get hidden dimension from backbone
+        self.hidden_dim = self.backbone.hidden_dim
+
+        # Handle weights configuration
+        if self.weights is not None:
+            if not self.weights in model_urls.keys():
+                possible_weights = [k for k in model_urls.keys() if k.startswith("vit")]
+                raise Exception("Weights value must be in {}".format(possible_weights))
+
+            self.weights_dict = model_urls[weights]
+            self.targets = model_urls[weights]["labels"]
+            self.pathologies = self.targets  # keep to be backward compatible
+
+            # Replace classification head to match number of classes
+            num_classes = len(self.pathologies)
+            self.backbone.heads = nn.Linear(self.hidden_dim, num_classes)
+
+            # Load task-specific weights if available
+            if "weights_url" in model_urls[weights]:
+                self.weights_filename_local = get_weights(weights, cache_dir=cache_dir)
+                try:
+                    checkpoint = torch.load(self.weights_filename_local, map_location='cpu', weights_only=False)
+                    # Handle different checkpoint formats
+                    if isinstance(checkpoint, dict):
+                        if 'state_dict' in checkpoint:
+                            state_dict = checkpoint['state_dict']
+                        elif 'model' in checkpoint:
+                            state_dict = checkpoint['model']
+                        else:
+                            state_dict = checkpoint
+                    else:
+                        # Assume it's a model object
+                        state_dict = checkpoint.state_dict()
+                    
+                    # Filter out keys that don't match (e.g., from different architectures)
+                    model_state_dict = self.state_dict()
+                    filtered_state_dict = {}
+                    for k, v in state_dict.items():
+                        if k in model_state_dict and v.shape == model_state_dict[k].shape:
+                            filtered_state_dict[k] = v
+                    
+                    self.load_state_dict(filtered_state_dict, strict=False)
+                except Exception as e:
+                    print("Warning: Could not load task-specific weights: {}".format(e))
+                    print("Using ImageNet pretrained backbone only.")
+
+            if "op_threshs" in model_urls[weights]:
+                self.register_buffer('op_threshs', torch.tensor(model_urls[weights]["op_threshs"]))
+            else:
+                self.register_buffer('op_threshs', op_threshs)
+
+            if "input_resolution" in model_urls[weights]:
+                self.input_resolution = model_urls[weights]["input_resolution"]
+            else:
+                self.input_resolution = 224  # Default ViT resolution
+
+            self.eval()
+        else:
+            # No weights specified, use default configuration
+            self.targets = self.__class__.targets
+            self.pathologies = self.targets
+            num_classes = len(datasets.default_pathologies)
+            self.backbone.heads = nn.Linear(self.hidden_dim, num_classes)
+            self.register_buffer('op_threshs', op_threshs)
+            self.input_resolution = 224
+
+    def __repr__(self):
+        if self.weights is not None:
+            return "XRV-ViT-{}".format(self.weights)
+        else:
+            return "XRV-ViT"
+
+    def features(self, x):
+        """Extract features from the model (CLS token)."""
+        if hasattr(self, 'input_resolution'):
+            x = utils.fix_resolution(x, self.input_resolution, self)
+            utils.warn_normalization(x)
+
+        # Manually go through ViT forward process to extract CLS token
+        # Patch embedding
+        x = self.backbone.conv_proj(x)  # [B, C, H, W]
+        x = x.flatten(2).transpose(1, 2)  # [B, N, C] where N = H*W
+        
+        # Add class token
+        batch_size = x.shape[0]
+        class_token = self.backbone.class_token.expand(batch_size, -1, -1)
+        x = torch.cat([class_token, x], dim=1)  # [B, N+1, C]
+        
+        # Forward through encoder (encoder handles positional embedding internally)
+        x = self.backbone.encoder(x)  # [B, N+1, C]
+        
+        # Extract CLS token (first token)
+        return x[:, 0]  # [B, C]
+
+    def forward(self, x):
+        """Forward pass."""
+        if hasattr(self, 'input_resolution'):
+            x = utils.fix_resolution(x, self.input_resolution, self)
+            utils.warn_normalization(x)
+
+        # Use backbone's forward method which includes the classification head
+        out = self.backbone(x)
+
+        if hasattr(self, 'apply_sigmoid') and self.apply_sigmoid:
+            out = torch.sigmoid(out)
+
+        if hasattr(self, "op_threshs") and (self.op_threshs != None):
+            out = torch.sigmoid(out)
+            out = op_norm(out, self.op_threshs)
+        return out
+
+
 def op_norm(outputs, op_threshs):
     """Normalize outputs according to operating points for a given model.
     Args: 
@@ -522,6 +732,8 @@ def get_model(weights: str, **kwargs):
         return DenseNet(weights=weights, **kwargs)
     elif weights.startswith("resnet"):
         return ResNet(weights=weights, **kwargs)
+    elif weights.startswith("vit"):
+        return ViT(weights=weights, **kwargs)
     else:
         raise Exception("Unknown model")
 
