@@ -84,8 +84,32 @@ def train(model, dataset, cfg):
     #print(model)
 
     # Optimizer
-    optim = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=1e-5, amsgrad=True)
-    print(optim)
+    optimizer_type = getattr(cfg, 'optimizer', 'adam').lower()
+    weight_decay = getattr(cfg, 'weight_decay', 1e-5)
+    
+    if optimizer_type == 'adamw':
+        optim = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=weight_decay)
+    else:
+        # Default to Adam (backward compatibility)
+        optim = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=weight_decay, amsgrad=True)
+    print(f"Optimizer: {optim}")
+    
+    # Learning rate scheduler
+    scheduler = None
+    scheduler_type = getattr(cfg, 'scheduler', None)
+    warmup_ratio = getattr(cfg, 'warmup_ratio', 0.0)
+    
+    if scheduler_type == 'cosine':
+        # Cosine annealing scheduler
+        # T_max is the number of epochs after warmup
+        warmup_epochs = int(cfg.num_epochs * warmup_ratio) if warmup_ratio > 0 else 0
+        T_max = cfg.num_epochs - warmup_epochs
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=T_max, eta_min=0)
+        print(f"Scheduler: CosineAnnealingLR (T_max={T_max}, warmup_epochs={warmup_epochs})")
+    elif warmup_ratio > 0:
+        # Only warmup without scheduler
+        warmup_epochs = int(cfg.num_epochs * warmup_ratio)
+        print(f"Warmup: {warmup_epochs} epochs ({warmup_ratio*100:.1f}% of total)")
 
     # ========================================================================
     # Loss 函数定义位置
@@ -125,8 +149,24 @@ def train(model, dataset, cfg):
 
     model.to(device)
     
+    # Calculate warmup epochs
+    warmup_ratio = getattr(cfg, 'warmup_ratio', 0.0)
+    warmup_epochs = int(cfg.num_epochs * warmup_ratio) if warmup_ratio > 0 else 0
+    initial_lr = cfg.lr
+    
     for epoch in range(start_epoch, cfg.num_epochs):
-
+        
+        # Warmup learning rate
+        if epoch < warmup_epochs and warmup_epochs > 0:
+            # Linear warmup
+            current_lr = initial_lr * (epoch + 1) / warmup_epochs
+            for param_group in optim.param_groups:
+                param_group['lr'] = current_lr
+        elif epoch == warmup_epochs and warmup_epochs > 0:
+            # Ensure lr is set to initial_lr after warmup before scheduler starts
+            for param_group in optim.param_groups:
+                param_group['lr'] = initial_lr
+        
         avg_loss = train_epoch(cfg=cfg,
                                epoch=epoch,
                                model=model,
@@ -141,6 +181,18 @@ def train(model, dataset, cfg):
                                      device=device,
                                      data_loader=valid_loader,
                                      criterion=criterion)[0]
+        
+        # Update learning rate scheduler (after warmup)
+        if scheduler is not None and epoch >= warmup_epochs:
+            scheduler.step()
+        
+        # Print learning rate info periodically
+        if epoch % 10 == 0 or epoch == cfg.num_epochs - 1:
+            current_lr = optim.param_groups[0]['lr']
+            if epoch < warmup_epochs:
+                print(f"Epoch {epoch+1}/{cfg.num_epochs}: Learning rate (warmup) = {current_lr:.6f}")
+            else:
+                print(f"Epoch {epoch+1}/{cfg.num_epochs}: Learning rate = {current_lr:.6f}")
 
         if np.mean(auc_valid) > best_metric:
             best_metric = np.mean(auc_valid)
