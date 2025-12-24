@@ -25,8 +25,10 @@ import sys
 import argparse
 import torch
 import numpy as np
+import pandas as pd
 from glob import glob
 from pathlib import Path
+from os.path import exists
 
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -284,17 +286,38 @@ def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_si
     
     print(f"使用数据集路径: {imgpath}")
     
-    # 创建测试数据集
+    # ============================================================================
+    # 使用预定义的测试集划分
+    # ============================================================================
+    test_list_path = "/workspace/data/test_list.txt"
+    use_predefined_test_split = exists(test_list_path)
+    
+    if use_predefined_test_split:
+        print("=" * 60)
+        print("使用预定义的测试集划分文件")
+        print("=" * 60)
+        test_list = pd.read_csv(test_list_path, header=None)[0].tolist()
+        test_set = set(test_list)
+        print(f"预定义测试集: {len(test_list)} 个样本")
+    else:
+        print("=" * 60)
+        print("警告: 未找到预定义测试集划分文件")
+        print(f"  期望路径: {test_list_path}")
+        print("  将使用整个数据集作为测试集（不推荐）")
+        print("=" * 60)
+        test_set = None
+    
+    # 创建完整数据集（稍后会过滤为测试集）
     try:
         if dataset_name.lower() == 'nih':
-            test_dataset = xrv.datasets.NIH_Dataset(
+            full_dataset = xrv.datasets.NIH_Dataset(
                 imgpath=imgpath,
                 transform=xrv.datasets.XRayCenterCrop(),
                 unique_patients=False,
                 views=["PA", "AP"]
             )
         elif 'pc' in dataset_name.lower():
-            test_dataset = xrv.datasets.PC_Dataset(
+            full_dataset = xrv.datasets.PC_Dataset(
                 imgpath=imgpath,
                 transform=xrv.datasets.XRayCenterCrop(),
                 unique_patients=False,
@@ -305,7 +328,7 @@ def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_si
             csvpath = os.path.join(os.path.dirname(imgpath), "train.csv") if os.path.dirname(imgpath) else None
             if not csvpath or not os.path.exists(csvpath):
                 csvpath = None  # 使用默认的csvpath
-            test_dataset = xrv.datasets.CheX_Dataset(
+            full_dataset = xrv.datasets.CheX_Dataset(
                 imgpath=imgpath,
                 csvpath=csvpath,
                 transform=xrv.datasets.XRayCenterCrop(),
@@ -314,7 +337,7 @@ def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_si
         else:
             # 通用数据集加载
             print(f"警告：使用通用数据集加载器，可能不完全兼容")
-            test_dataset = xrv.datasets.XRayDataset(
+            full_dataset = xrv.datasets.XRayDataset(
                 imgpath=imgpath,
                 transform=xrv.datasets.XRayCenterCrop()
             )
@@ -323,6 +346,35 @@ def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_si
         import traceback
         traceback.print_exc()
         return None
+    
+    # 如果使用预定义划分，过滤出测试集
+    if use_predefined_test_split and test_set is not None:
+        # 检查数据集是否有 Image Index 字段（NIH数据集使用）
+        if 'Image Index' in full_dataset.csv.columns:
+            # 根据 Image Index 匹配测试集
+            test_mask = full_dataset.csv['Image Index'].isin(test_set)
+            test_inds = np.where(test_mask)[0]
+            
+            if len(test_inds) > 0:
+                print(f"从完整数据集中筛选出测试集: {len(test_inds)} 个样本")
+                print(f"  完整数据集: {len(full_dataset)} 个样本")
+                print(f"  测试集占比: {len(test_inds)/len(full_dataset)*100:.2f}%")
+                
+                # 创建测试集子集
+                test_dataset = xrv.datasets.SubsetDataset(full_dataset, test_inds)
+            else:
+                print("警告: 未找到匹配的测试集样本，使用完整数据集")
+                test_dataset = full_dataset
+        else:
+            print(f"警告: 数据集 {dataset_name} 不支持预定义划分（缺少 'Image Index' 字段）")
+            print("  使用完整数据集作为测试集")
+            test_dataset = full_dataset
+    else:
+        # 没有预定义划分，使用完整数据集
+        print("使用完整数据集作为测试集（未使用预定义划分）")
+        test_dataset = full_dataset
+    
+    print(f"最终测试集大小: {len(test_dataset)} 个样本")
     
     # 创建DataLoader
     test_loader = torch.utils.data.DataLoader(
@@ -542,3 +594,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

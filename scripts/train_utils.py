@@ -65,10 +65,23 @@ def train(model, dataset, cfg):
         torch.backends.cudnn.benchmark = False
 
     # Dataset    
+    # ============================================================================
+    # 数据集划分说明
+    # ============================================================================
+    # 注意：传入的 dataset 应该已经是训练/验证集的合并（来自 train_val_list.txt）
+    # 这里需要将其进一步划分为训练集和验证集
+    # 如果 dataset 已经是从预定义划分中来的，我们只需要从中划分出验证集
+    # ============================================================================
+    # 使用 GroupShuffleSplit 从训练/验证集中划分出训练集和验证集（80/20）
+    # 这样可以确保同一患者的样本不会同时出现在训练集和验证集中
     gss = sklearn.model_selection.GroupShuffleSplit(train_size=0.8,test_size=0.2, random_state=cfg.seed)
-    train_inds, test_inds = next(gss.split(X=range(len(dataset)), groups=dataset.csv.patientid))
+    train_inds, valid_inds = next(gss.split(X=range(len(dataset)), groups=dataset.csv.patientid))
     train_dataset = xrv.datasets.SubsetDataset(dataset, train_inds)
-    valid_dataset = xrv.datasets.SubsetDataset(dataset, test_inds)
+    valid_dataset = xrv.datasets.SubsetDataset(dataset, valid_inds)
+    
+    print(f"最终数据集划分:")
+    print(f"  - 训练集: {len(train_dataset)} 个样本")
+    print(f"  - 验证集: {len(valid_dataset)} 个样本")
 
     # Dataloader
     train_loader = torch.utils.data.DataLoader(train_dataset,

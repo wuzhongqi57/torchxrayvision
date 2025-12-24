@@ -17,6 +17,7 @@ from os.path import exists, join
 import numpy as np
 from tqdm import tqdm
 import argparse
+import pandas as pd
 
 import torch
 import torchvision, torchvision.transforms
@@ -162,7 +163,45 @@ else:
     for d in datas:
         xrv.datasets.relabel_dataset(xrv.datasets.default_pathologies, d)
 
-#cut out training sets
+#cut out training sets using predefined splits
+# ============================================================================
+# 使用预定义的数据集划分文件
+# ============================================================================
+# 读取预定义划分文件（如果存在）
+train_val_list_path = "/workspace/data/train_val_list.txt"
+test_list_path = "/workspace/data/test_list.txt"
+
+use_predefined_split = exists(train_val_list_path) and exists(test_list_path)
+
+if use_predefined_split:
+    print("=" * 80)
+    print("使用预定义的数据集划分文件")
+    print("=" * 80)
+    train_val_list = pd.read_csv(train_val_list_path, header=None)[0].tolist()
+    test_list = pd.read_csv(test_list_path, header=None)[0].tolist()
+    
+    # 转换为集合以便快速查找
+    train_val_set = set(train_val_list)
+    test_set = set(test_list)
+    
+    print(f"预定义划分统计:")
+    print(f"  - train_val_list: {len(train_val_list)} 个样本")
+    print(f"  - test_list: {len(test_list)} 个样本")
+    print(f"  - 总计: {len(train_val_list) + len(test_list)} 个样本")
+    
+    # 检查重叠
+    overlap = train_val_set & test_set
+    if overlap:
+        print(f"  ⚠️  警告: 发现 {len(overlap)} 个重叠样本")
+    else:
+        print(f"  ✓ 无重叠，划分正确")
+else:
+    print("=" * 80)
+    print("未找到预定义划分文件，使用随机划分")
+    print("=" * 80)
+    print(f"  期望路径: {train_val_list_path}")
+    print(f"  期望路径: {test_list_path}")
+
 train_datas = []
 test_datas = []
 for i, dataset in enumerate(datas):
@@ -170,7 +209,36 @@ for i, dataset in enumerate(datas):
     # give patientid if not exist
     if "patientid" not in dataset.csv:
         dataset.csv["patientid"] = ["{}-{}".format(dataset.__class__.__name__, i) for i in range(len(dataset))]
+    
+    # 尝试使用预定义划分（如果可用且数据集支持）
+    if use_predefined_split:
+        # 检查数据集是否有 Image Index 字段（NIH数据集使用）
+        if 'Image Index' in dataset.csv.columns:
+            # 根据 Image Index 匹配划分
+            train_val_mask = dataset.csv['Image Index'].isin(train_val_set)
+            test_mask = dataset.csv['Image Index'].isin(test_set)
+            
+            train_val_inds = np.where(train_val_mask)[0]
+            test_inds = np.where(test_mask)[0]
+            
+            if len(train_val_inds) > 0 or len(test_inds) > 0:
+                print(f"数据集 {dataset.__class__.__name__}: 使用预定义划分")
+                print(f"  - 训练/验证集: {len(train_val_inds)} 个样本")
+                print(f"  - 测试集: {len(test_inds)} 个样本")
+                
+                train_dataset = xrv.datasets.SubsetDataset(dataset, train_val_inds)
+                test_dataset = xrv.datasets.SubsetDataset(dataset, test_inds)
+                
+                train_datas.append(train_dataset)
+                test_datas.append(test_dataset)
+                continue
         
+        # 检查其他可能的标识字段
+        # 对于其他数据集，可以在这里添加匹配逻辑
+        # 例如：PC_Dataset 可能使用 'ImageID'，CheX_Dataset 使用 'Path' 等
+    
+    # 如果没有预定义划分或数据集不支持，使用原来的随机划分方法
+    print(f"数据集 {dataset.__class__.__name__}: 使用随机划分（80/20）")
     gss = sklearn.model_selection.GroupShuffleSplit(train_size=0.8,test_size=0.2, random_state=cfg.seed)
     
     train_inds, test_inds = next(gss.split(X=range(len(dataset)), groups=dataset.csv.patientid))
