@@ -61,21 +61,53 @@ parser.add_argument('--labelunion', type=bool, default=False, help='')
 cfg = parser.parse_args()
 print(cfg)
 
-data_aug = None
-if cfg.data_aug:
-    data_aug = torchvision.transforms.Compose([
-        xrv.datasets.ToPILImage(),
-        torchvision.transforms.RandomAffine(cfg.data_aug_rot, 
-                                            translate=(cfg.data_aug_trans, cfg.data_aug_trans), 
-                                            scale=(1.0-cfg.data_aug_scale, 1.0+cfg.data_aug_scale)),
-        torchvision.transforms.ToTensor()
-    ])
-    print(data_aug)
-
-# Determine input resolution based on model type
+# Determine input resolution and normalization strategy based on model type
 # ViT models typically use 224x224, while other models use 512x512
 input_resolution = 224 if "vit" in cfg.model.lower() else 512
-transforms = torchvision.transforms.Compose([xrv.datasets.XRayCenterCrop(),xrv.datasets.XRayResizer(input_resolution)])
+use_imagenet_normalize = "vit" in cfg.model.lower()  # Use ImageNet normalization for ViT
+
+# Set up transforms
+if use_imagenet_normalize:
+    # For ViT: Use ImageNet-compatible normalization (grayscale -> 3 channels -> ImageNet mean/std)
+    # This is the standard approach used in CheXpert, REFERS, and most chest X-ray papers
+    # 
+    # Process:
+    # 1. XRayCenterCrop + XRayResizer: [1, H, W] in [-1024, 1024] range
+    # 2. ConvertToImageNetFormat: [1, H, W] -> [3, H, W] with [0, 1] -> ImageNet normalized
+    transforms = torchvision.transforms.Compose([
+        xrv.datasets.XRayCenterCrop(),
+        xrv.datasets.XRayResizer(input_resolution),
+        xrv.datasets.ConvertToImageNetFormat()
+    ])
+    print(f"Using ImageNet-compatible normalization for ViT model")
+    print(f"  - Input resolution: {input_resolution}x{input_resolution}")
+    print(f"  - Format: Grayscale -> 3 channels -> ImageNet mean/std")
+    print(f"  - Process: [-1024, 1024] -> [0, 1] -> repeat to 3 channels -> ImageNet normalization")
+    
+    # For ViT: Data augmentation is currently disabled when using ImageNet normalization
+    # TODO: Implement data augmentation for ImageNet-normalized images if needed
+    data_aug = None
+    if cfg.data_aug:
+        print("Warning: Data augmentation for ViT with ImageNet normalization is not yet fully implemented")
+        print("  Training will proceed without data augmentation")
+else:
+    # For other models: Use original normalization ([-1024, 1024] range, single channel)
+    transforms = torchvision.transforms.Compose([
+        xrv.datasets.XRayCenterCrop(),
+        xrv.datasets.XRayResizer(input_resolution)
+    ])
+    # For other models: use original data augmentation
+    data_aug = None
+    if cfg.data_aug:
+        data_aug = torchvision.transforms.Compose([
+            xrv.datasets.ToPILImage(),
+            torchvision.transforms.RandomAffine(cfg.data_aug_rot, 
+                                                translate=(cfg.data_aug_trans, cfg.data_aug_trans), 
+                                                scale=(1.0-cfg.data_aug_scale, 1.0+cfg.data_aug_scale)),
+            torchvision.transforms.ToTensor()
+        ])
+        print(data_aug)
+
 print(f"Using input resolution: {input_resolution}x{input_resolution} for model: {cfg.model}")
 
 datas = []

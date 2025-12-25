@@ -187,7 +187,80 @@ def get_dataset_path(dataset_name, dataset_dir=None):
     return imgpath
 
 
-def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_size=32):
+def get_test_transform(model_type=None):
+    """
+    获取测试时使用的transform，与训练时保持一致
+    
+    Args:
+        model_type: 模型类型（用于判断是否使用ImageNet normalize）
+    
+    Returns:
+        transform: 测试时使用的transform
+    """
+    import torchvision
+    
+    # 判断是否为ViT模型
+    is_vit = model_type and 'vit' in model_type.lower()
+    
+    if is_vit:
+        # ViT模型：使用ImageNet normalize（灰度复制到3通道 + ImageNet mean/std）
+        # 与训练时保持一致
+        input_resolution = 224
+        
+        # 创建ImageNet normalize的transform
+        # 注意：ConvertToImageNetFormat可能不存在，我们手动实现
+        # XRayResizer输出: numpy array, shape [1, H, W], 值在[0, 1]范围
+        class ConvertToImageNetFormat:
+            """将灰度图转换为3通道并应用ImageNet normalize"""
+            def __init__(self):
+                # ImageNet mean和std
+                self.mean = torch.tensor([0.485, 0.456, 0.406])
+                self.std = torch.tensor([0.229, 0.224, 0.225])
+            
+            def __call__(self, img):
+                # img应该是numpy array，shape为 [1, H, W]（XRayResizer的输出），值在[0, 1]范围
+                if isinstance(img, np.ndarray):
+                    img = torch.from_numpy(img).float()
+                
+                # 确保shape是 [1, H, W]
+                if img.dim() == 2:
+                    img = img.unsqueeze(0)  # [H, W] -> [1, H, W]
+                elif img.dim() == 3:
+                    if img.shape[0] != 1:
+                        # 如果是 [H, W, 1] 或其他格式，需要调整
+                        if img.shape[2] == 1:
+                            img = img.permute(2, 0, 1)  # [H, W, 1] -> [1, H, W]
+                        else:
+                            raise ValueError(f"Unexpected image shape: {img.shape}")
+                else:
+                    raise ValueError(f"Unexpected image shape: {img.shape}")
+                
+                # 确保值在[0, 1]范围（XRayResizer应该已经做了，但为了安全起见）
+                img = torch.clamp(img, 0.0, 1.0)
+                
+                # 复制到3通道: [1, H, W] -> [3, H, W]
+                img = img.repeat(3, 1, 1)
+                
+                # 应用ImageNet normalize: (x - mean) / std
+                img = (img - self.mean.view(3, 1, 1)) / self.std.view(3, 1, 1)
+                
+                return img
+        
+        transform = torchvision.transforms.Compose([
+            xrv.datasets.XRayCenterCrop(),
+            xrv.datasets.XRayResizer(input_resolution),
+            ConvertToImageNetFormat()
+        ])
+        print(f"使用ViT transform: ImageNet normalize (3通道, 224x224)")
+    else:
+        # 其他模型：使用原始normalize（单通道）
+        transform = xrv.datasets.XRayCenterCrop()
+        print(f"使用标准transform: 单通道")
+    
+    return transform
+
+
+def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_size=32, model_type=None):
     """
     在测试集上评估模型
     
@@ -197,6 +270,7 @@ def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_si
         dataset_name: 数据集名称
         device: 设备 ('cpu' 或 'cuda')
         batch_size: batch大小
+        model_type: 模型类型（用于确定transform）
     
     Returns:
         metrics: 评估指标字典
@@ -307,19 +381,22 @@ def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_si
         print("=" * 60)
         test_set = None
     
+    # 获取测试时使用的transform（与训练时保持一致）
+    test_transform = get_test_transform(model_type)
+    
     # 创建完整数据集（稍后会过滤为测试集）
     try:
         if dataset_name.lower() == 'nih':
             full_dataset = xrv.datasets.NIH_Dataset(
                 imgpath=imgpath,
-                transform=xrv.datasets.XRayCenterCrop(),
+                transform=test_transform,
                 unique_patients=False,
                 views=["PA", "AP"]
             )
         elif 'pc' in dataset_name.lower():
             full_dataset = xrv.datasets.PC_Dataset(
                 imgpath=imgpath,
-                transform=xrv.datasets.XRayCenterCrop(),
+                transform=test_transform,
                 unique_patients=False,
                 views=["PA", "AP"]
             )
@@ -331,7 +408,7 @@ def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_si
             full_dataset = xrv.datasets.CheX_Dataset(
                 imgpath=imgpath,
                 csvpath=csvpath,
-                transform=xrv.datasets.XRayCenterCrop(),
+                transform=test_transform,
                 unique_patients=False
             )
         else:
@@ -339,7 +416,7 @@ def evaluate_model(model, test_dataset_dir, dataset_name, device='cpu', batch_si
             print(f"警告：使用通用数据集加载器，可能不完全兼容")
             full_dataset = xrv.datasets.XRayDataset(
                 imgpath=imgpath,
-                transform=xrv.datasets.XRayCenterCrop()
+                transform=test_transform
             )
     except Exception as e:
         print(f"错误：无法加载数据集: {e}")
@@ -562,7 +639,8 @@ def main():
                     test_dataset_dir=test_dataset_dir,
                     dataset_name=args.dataset,
                     device=device,
-                    batch_size=args.batch_size
+                    batch_size=args.batch_size,
+                    model_type=model_type
                 )
                 if metrics:
                     print(f"\n评估结果:")

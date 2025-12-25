@@ -262,3 +262,5 @@ python3 process_image.py ../tests/16747_3_1.jpg -resize -weights vit-base-res224
 
 详情请参考 `scripts/README.md`。
 
+
+
