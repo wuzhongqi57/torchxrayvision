@@ -67,7 +67,7 @@ input_resolution = 224 if "vit" in cfg.model.lower() else 512
 use_imagenet_normalize = "vit" in cfg.model.lower()  # Use ImageNet normalization for ViT
 
 # Set up transforms
-if use_imagenet_normalize:
+if False and use_imagenet_normalize:
     # For ViT: Use ImageNet-compatible normalization (grayscale -> 3 channels -> ImageNet mean/std)
     # This is the standard approach used in CheXpert, REFERS, and most chest X-ray papers
     # 
@@ -390,7 +390,8 @@ else:
 # 调用 train_utils.train() 开始训练
 # 训练流程包括：loss 计算、metrics (AUC) 计算等，详见 train_utils.py
 # ============================================================================
-train_utils.train(model, train_dataset, cfg)
+train_utils.train(model, train_dataset, test_dataset, cfg)
+
 
 
 print("Done")

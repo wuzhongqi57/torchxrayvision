@@ -36,7 +36,7 @@ def tqdm(*args, **kwargs):
 
 
 
-def train(model, dataset, cfg):
+def train(model, dataset, test_dataset, cfg):
     print("Our config:")
     pprint.pprint(cfg)
         
@@ -76,13 +76,16 @@ def train(model, dataset, cfg):
     # 这样可以确保同一患者的样本不会同时出现在训练集和验证集中
     gss = sklearn.model_selection.GroupShuffleSplit(train_size=0.8,test_size=0.2, random_state=cfg.seed)
     train_inds, valid_inds = next(gss.split(X=range(len(dataset)), groups=dataset.csv.patientid))
+
+
+    
     train_dataset = xrv.datasets.SubsetDataset(dataset, train_inds)
     valid_dataset = xrv.datasets.SubsetDataset(dataset, valid_inds)
-    
+
     print(f"最终数据集划分:")
     print(f"  - 训练集: {len(train_dataset)} 个样本")
     print(f"  - 验证集: {len(valid_dataset)} 个样本")
-
+    print(f"  - 测试集: {len(test_dataset)} 个样本")
     # Dataloader
     train_loader = torch.utils.data.DataLoader(train_dataset,
                                                batch_size=cfg.batch_size,
@@ -90,6 +93,11 @@ def train(model, dataset, cfg):
                                                num_workers=cfg.threads, 
                                                pin_memory=cfg.cuda)
     valid_loader = torch.utils.data.DataLoader(valid_dataset,
+                                               batch_size=cfg.batch_size,
+                                               shuffle=cfg.shuffle,
+                                               num_workers=cfg.threads, 
+                                               pin_memory=cfg.cuda)
+    test_loader = torch.utils.data.DataLoader(test_dataset,
                                                batch_size=cfg.batch_size,
                                                shuffle=cfg.shuffle,
                                                num_workers=cfg.threads, 
@@ -194,6 +202,15 @@ def train(model, dataset, cfg):
                                      device=device,
                                      data_loader=valid_loader,
                                      criterion=criterion)[0]
+
+        auc_test = valid_test_epoch(
+                                    name='Test',
+                                    epoch=epoch,
+                                    model=model,
+                                    device=device,
+                                    data_loader=test_loader,
+                                    criterion=criterion)[0]
+                                
         
         # Update learning rate scheduler (after warmup)
         if scheduler is not None and epoch >= warmup_epochs:
